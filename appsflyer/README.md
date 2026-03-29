@@ -1,111 +1,137 @@
-# AppsFlyer ingestion (local cache)
+# AppsFlyer ingestion (two-layer model)
 
-Small Python utilities to pull AppsFlyer **aggregate** (Pull API / CSV) reports into SQLite, optionally pull **Master API** pivots as raw files, and run simple offline reports.
+AppsFlyer is now modeled in two layers:
+
+1. **AppsFlyer source of truth** — data as pulled from AppsFlyer MCP
+2. **Normalized marketing facts** — daily analytics table for CAC / trends / rollups
+
+This is the foundation for later blending with Meta Ads, Apple Search Ads, Mixpanel, OneSignal, and other systems.
 
 ## Layout
 
-- `common.py` — shared env loading, date validation, Bearer GET with retries
-- `fetcher/fetch_appsflyer.py` — Pull aggregate: HTTP fetch, CSV parse, `daily_performance` table (optional **ad set** / **ad** when the CSV has them)
-- `fetcher/fetch_appsflyer_master.py` — Master API: raw JSON/CSV to `data/master_raw/` (no SQLite normalization yet)
-- `queries/query_appsflyer.py` — summaries and breakdowns over the Pull cache
-- `data/appsflyer.db` — default SQLite path (directory is created on first run)
+- `common.py` — shared env loading and date validation
+- `fetcher/fetch_appsflyer_mcp.py` — fetch from AppsFlyer MCP into both layers
+- `queries/query_appsflyer_mcp.py` — query normalized daily facts (CAC, daily, weekly, top entities)
+- `fetcher/fetch_appsflyer_master.py` — optional raw Master API inspection
+- `data/appsflyer.db` — SQLite database
 
-### Pull aggregate API vs Master API
+## Layer 1 — AppsFlyer source of truth
 
-| | **Pull aggregate** (`fetch_appsflyer.py`) | **Master API** (`fetch_appsflyer_master.py`) |
-|---|-------------------------------------------|---------------------------------------------|
-| **What it is** | Fixed-path CSV export per report segment | Parameterized pivot: `groupings` + `kpis` ([overview](https://dev.appsflyer.com/hc/reference/overview-9)) |
-| **Output** | Normalized rows in SQLite | Raw file under `data/master_raw/` for inspection |
-| **Ad / ad set** | Only if that CSV export includes columns | Request dimensions in `--groupings` if your account/network supports them ([Get Master Report](https://dev.appsflyer.com/hc/reference/master_api_get)) |
-| **Freshness** | Per export rules | Often daily, with typical lag (see Help Center Master API article) |
+Table: `appsflyer_mcp_source_rows`
 
-Use Pull for a stable pipeline into `daily_performance`; use Master when you need richer breakdowns and are still validating field names and JSON/CSV shape.
+Purpose:
+- preserve AppsFlyer-shaped fetched rows
+- keep provenance and fetch windows
+- enable debugging / reprocessing / auditability
+
+Main columns:
+- `fetch_window_from`, `fetch_window_to`
+- `fact_date`
+- `media_source`, `campaign`, `adset`, `ad`
+- `kpi_name`, `metric_column`, `metric_value`
+- `installs`, `cost`
+- `timezone`, `currency`, `fetched_at`
+- `raw_row_json`, `raw_metadata_json`
+
+## Layer 2 — normalized analytics
+
+Table: `marketing_fact_daily`
+
+Grain:
+- one row per `fact_date x media_source x campaign x adset x ad`
+
+Measures:
+- `spend`
+- `installs`
+- `af_start_trial`
+- `af_subscribe`
+- `af_tutorial_completion`
+- `rc_trial_converted_event`
+- `arpu_ltv`
+
+This is the table to use for:
+- CAC = spend / af_subscribe
+- day-over-day analysis
+- week-over-week analysis
+- month-over-month analysis
+- top campaigns/adsets/ads by CAC or conversions
 
 ## Setup
 
-```bash
-cd /root/dojo-agents/appsflyer
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
 Create `appsflyer/.env` (do not commit) with:
-
-- `APPSFLYER_APP_ID` — your app identifier in AppsFlyer
-- `APPSFLYER_API_TOKEN` — API V2 token from the dashboard
-
-Optional environment variables:
-
-- `APPSFLYER_SQLITE_PATH` — override DB path (default: `data/appsflyer.db` under this folder)
-- `APPSFLYER_AGG_BASE` — aggregate export base URL if your tenant uses another host
-- `APPSFLYER_REPORT_SEGMENT` — default report path segment (see fetcher help)
-- `APPSFLYER_MASTER_BASE` — Master API base URL (default: `https://hq1.appsflyer.com/api/master-agg-data/v4/app`)
-- `APPSFLYER_MASTER_GROUPINGS` / `APPSFLYER_MASTER_KPIS` / `APPSFLYER_MASTER_FORMAT` — defaults for the Master fetcher CLI
-
-## Fetch
-
-The fetcher loads `.env` from this directory, requests a CSV aggregate report for `--from` / `--to`, and **upserts** normalized rows keyed by date, media source, campaign, ad set, and ad (NULLs for dimensions not present in the file). Use an AppsFlyer aggregate export that includes ad-level breakdown when you need **Ad** / **Ad set** columns; availability varies by ad network and report type.
-
-```bash
-python fetcher/fetch_appsflyer.py --from 2026-01-01 --to 2026-01-07
-```
-
-Use `--dry-run` to validate credentials resolution and schema without calling the API or inserting data.
-
-**Important:** confirm the correct **report segment** and **auth style** in AppsFlyer’s docs for your account; adjust `REPORT_PATH_TEMPLATE`, `build_report_url()`, `fetch_report_csv()`, and `FIELD_ALIASES` in `fetch_appsflyer.py` if your export differs.
-
-## Master API (raw)
-
-Confirm query parameter names and allowed `groupings` / `kpis` values in the [developer reference](https://dev.appsflyer.com/hc/reference/master_api_get). Ad- and ad-set–level groupings are not available for every network.
-
-```bash
-# Example shape only — replace groupings/kpis with values from your docs
-python fetcher/fetch_appsflyer_master.py \
-  --from 2026-01-01 --to 2026-01-07 \
-  --groupings "date,pid,c,af_adset,af_ad" \
-  --kpis "impressions,clicks,installs,cost,revenue" \
-  --format json --pretty
-
-python fetcher/fetch_appsflyer_master.py --from 2026-01-01 --to 2026-01-02 --dry-run
-```
-
-Extra query keys: `--param timezone=...` (repeat as needed). Raw files are written under `data/master_raw/` (gitignored by default).
-
-## Query
-
-After pulling a fetcher upgrade, run `python fetcher/fetch_appsflyer.py --from YYYY-MM-DD --to YYYY-MM-DD --dry-run` once so the local DB migrates (adds `ad` / `adset` and the widened unique key) before using new query modes.
-
-```bash
-python queries/query_appsflyer.py summary --from 2026-01-01 --to 2026-01-07
-python queries/query_appsflyer.py media-sources --from 2026-01-01 --to 2026-01-07
-python queries/query_appsflyer.py campaigns --from 2026-01-01 --to 2026-01-07
-python queries/query_appsflyer.py adsets --from 2026-01-01 --to 2026-01-07
-python queries/query_appsflyer.py ads --from 2026-01-01 --to 2026-01-07
-```
-
-Breakdowns reflect whatever dimensions were in the ingested CSV. If **adsets** / **ads** show `(unknown)` only, your Pull export likely does not include those columns—confirm the report segment and field mapping in `fetch_appsflyer.py` (`FIELD_ALIASES`).
-
-## MCP KPI fetcher (Phase 1)
-
-Use AppsFlyer MCP (`fetch_aggregated_data`) to fetch KPI snapshots with ad/adset dimensions into table `mcp_kpi_performance`.
-
-Required in `appsflyer/.env`:
 
 - `APPSFLYER_APP_ID`
 - `APPSFLYER_MCP_TOKEN`
-- optional: `APPSFLYER_MCP_URL` (default: `https://mcp.appsflyer.com/auth/mcp`)
+- optional: `APPSFLYER_MCP_URL`
 
-Run:
+## Fetch
+
+Dry-run:
 
 ```bash
-python fetcher/fetch_appsflyer_mcp.py --from 2026-02-28 --to 2026-03-28
-python queries/query_appsflyer_mcp.py top-ads --from 2026-02-28 --to 2026-03-28 --kpi af_start_trial_unique_users
+python fetcher/fetch_appsflyer_mcp.py --from 2026-03-01 --to 2026-03-28 --dry-run
 ```
 
-This fetcher pulls:
-- `af_start_trial` unique users (primary)
-- `af_subscribe` unique users
-- `af_tutorial_completion` unique users
-- `rc_trial_converted_event` unique users
-- `ARPU` period `ltv`
+Real fetch:
+
+```bash
+python fetcher/fetch_appsflyer_mcp.py --from 2026-03-01 --to 2026-03-28
+```
+
+The fetcher requests:
+- dimensions: `Date`, `Media source`, `Campaign`, `Adset`, `Ad`
+- metrics per KPI fetch:
+  - target KPI
+  - `Installs`
+  - `Cost`
+
+Current KPI set:
+- `af_start_trial_unique_users`
+- `af_subscribe_unique_users`
+- `af_tutorial_completion_unique_users`
+- `rc_trial_converted_event_unique_users`
+- `arpu_ltv`
+
+## Query
+
+Summary CAC:
+
+```bash
+python queries/query_appsflyer_mcp.py summary --from 2026-01-01 --to 2026-03-28
+```
+
+Daily CAC:
+
+```bash
+python queries/query_appsflyer_mcp.py daily-cac --from 2026-01-01 --to 2026-03-28
+```
+
+Weekly CAC:
+
+```bash
+python queries/query_appsflyer_mcp.py weekly-cac --from 2026-01-01 --to 2026-03-28
+```
+
+Top campaigns:
+
+```bash
+python queries/query_appsflyer_mcp.py top-campaigns --from 2026-01-01 --to 2026-03-28 --limit 20
+```
+
+Top adsets:
+
+```bash
+python queries/query_appsflyer_mcp.py top-adsets --from 2026-01-01 --to 2026-03-28 --limit 20
+```
+
+Top ads:
+
+```bash
+python queries/query_appsflyer_mcp.py top-ads --from 2026-01-01 --to 2026-03-28 --limit 20
+```
+
+## Notes
+
+- AppsFlyer MCP remains the ingestion/source layer, not the final business-truth layer.
+- CAC and trend analysis should use `marketing_fact_daily`.
+- Later, additional systems can enrich or reconcile normalized facts without mutating the raw AppsFlyer source layer.

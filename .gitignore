@@ -4,5 +4,6 @@ appsflyer/.env
 
 # Local cache / artifacts
 appsflyer/data/*.db
+appsflyer/data/master_raw/*
 **/__pycache__/
 *.pyc

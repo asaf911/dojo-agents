@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Query KPI data fetched through AppsFlyer MCP (mcp_kpi_performance table)."""
+"""Query normalized AppsFlyer marketing facts for CAC and trend analysis."""
 
 from __future__ import annotations
 
@@ -18,27 +18,6 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def top_ads(conn: sqlite3.Connection, date_from: str, date_to: str, kpi_name: str, limit: int) -> list[sqlite3.Row]:
-    sql = """
-    SELECT
-        COALESCE(ad, '(unknown)') AS ad,
-        COALESCE(adset, '(unknown)') AS adset,
-        COALESCE(campaign, '(unknown)') AS campaign,
-        COALESCE(media_source, '(unknown)') AS media_source,
-        SUM(COALESCE(metric_value, 0)) AS kpi_value,
-        SUM(COALESCE(installs, 0)) AS installs,
-        CASE WHEN SUM(COALESCE(metric_value, 0)) > 0
-             THEN SUM(COALESCE(installs, 0)) * 1.0 / SUM(COALESCE(metric_value, 0))
-             ELSE NULL END AS installs_per_kpi
-    FROM mcp_kpi_performance
-    WHERE date_from = ? AND date_to = ? AND kpi_name = ?
-    GROUP BY 1, 2, 3, 4
-    ORDER BY kpi_value DESC
-    LIMIT ?
-    """
-    return list(conn.execute(sql, (date_from, date_to, kpi_name, limit)))
-
-
 def print_rows(rows: list[sqlite3.Row]) -> None:
     if not rows:
         print("(no rows)")
@@ -49,25 +28,111 @@ def print_rows(rows: list[sqlite3.Row]) -> None:
         print("\t".join("" if r[k] is None else str(r[k]) for k in keys))
 
 
+def top_entities(conn: sqlite3.Connection, date_from: str, date_to: str, entity: str, limit: int) -> list[sqlite3.Row]:
+    if entity not in {"media_source", "campaign", "adset", "ad"}:
+        raise ValueError("entity must be one of media_source, campaign, adset, ad")
+    sql = f"""
+    SELECT
+        COALESCE({entity}, '(unknown)') AS entity,
+        SUM(COALESCE(spend, 0)) AS spend,
+        SUM(COALESCE(af_subscribe, 0)) AS af_subscribe,
+        SUM(COALESCE(af_start_trial, 0)) AS af_start_trial,
+        SUM(COALESCE(installs, 0)) AS installs,
+        CASE WHEN SUM(COALESCE(af_subscribe, 0)) > 0
+             THEN SUM(COALESCE(spend, 0)) * 1.0 / SUM(COALESCE(af_subscribe, 0))
+             ELSE NULL END AS cac
+    FROM marketing_fact_daily
+    WHERE fact_date BETWEEN ? AND ?
+    GROUP BY 1
+    ORDER BY af_subscribe DESC, spend DESC
+    LIMIT ?
+    """
+    return list(conn.execute(sql, (date_from, date_to, limit)))
+
+
+def weekly_cac(conn: sqlite3.Connection, date_from: str, date_to: str) -> list[sqlite3.Row]:
+    sql = """
+    SELECT
+        strftime('%Y-W%W', fact_date) AS year_week,
+        MIN(fact_date) AS week_start,
+        MAX(fact_date) AS week_end,
+        SUM(COALESCE(spend, 0)) AS spend,
+        SUM(COALESCE(af_subscribe, 0)) AS af_subscribe,
+        SUM(COALESCE(af_start_trial, 0)) AS af_start_trial,
+        SUM(COALESCE(installs, 0)) AS installs,
+        CASE WHEN SUM(COALESCE(af_subscribe, 0)) > 0
+             THEN SUM(COALESCE(spend, 0)) * 1.0 / SUM(COALESCE(af_subscribe, 0))
+             ELSE NULL END AS cac
+    FROM marketing_fact_daily
+    WHERE fact_date BETWEEN ? AND ?
+    GROUP BY 1
+    ORDER BY week_start
+    """
+    return list(conn.execute(sql, (date_from, date_to)))
+
+
+def daily_cac(conn: sqlite3.Connection, date_from: str, date_to: str) -> list[sqlite3.Row]:
+    sql = """
+    SELECT
+        fact_date,
+        SUM(COALESCE(spend, 0)) AS spend,
+        SUM(COALESCE(af_subscribe, 0)) AS af_subscribe,
+        SUM(COALESCE(af_start_trial, 0)) AS af_start_trial,
+        SUM(COALESCE(installs, 0)) AS installs,
+        CASE WHEN SUM(COALESCE(af_subscribe, 0)) > 0
+             THEN SUM(COALESCE(spend, 0)) * 1.0 / SUM(COALESCE(af_subscribe, 0))
+             ELSE NULL END AS cac
+    FROM marketing_fact_daily
+    WHERE fact_date BETWEEN ? AND ?
+    GROUP BY fact_date
+    ORDER BY fact_date
+    """
+    return list(conn.execute(sql, (date_from, date_to)))
+
+
+def summary(conn: sqlite3.Connection, date_from: str, date_to: str) -> list[sqlite3.Row]:
+    sql = """
+    SELECT
+        ? AS date_from,
+        ? AS date_to,
+        SUM(COALESCE(spend, 0)) AS spend,
+        SUM(COALESCE(af_subscribe, 0)) AS af_subscribe,
+        SUM(COALESCE(af_start_trial, 0)) AS af_start_trial,
+        SUM(COALESCE(installs, 0)) AS installs,
+        CASE WHEN SUM(COALESCE(af_subscribe, 0)) > 0
+             THEN SUM(COALESCE(spend, 0)) * 1.0 / SUM(COALESCE(af_subscribe, 0))
+             ELSE NULL END AS cac
+    FROM marketing_fact_daily
+    WHERE fact_date BETWEEN ? AND ?
+    """
+    return list(conn.execute(sql, (date_from, date_to, date_from, date_to)))
+
+
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(description="Query AppsFlyer MCP KPI data")
-    p.add_argument("command", choices=["top-ads"])
+    p = argparse.ArgumentParser(description="Query normalized AppsFlyer marketing facts")
+    p.add_argument("command", choices=["summary", "daily-cac", "weekly-cac", "top-media", "top-campaigns", "top-adsets", "top-ads"])
     p.add_argument("--from", dest="date_from", required=True)
     p.add_argument("--to", dest="date_to", required=True)
-    p.add_argument(
-        "--kpi",
-        dest="kpi_name",
-        default="af_start_trial_unique_users",
-        help="KPI key (default: af_start_trial_unique_users)",
-    )
     p.add_argument("--limit", type=int, default=10)
     p.add_argument("--db", default=str(DEFAULT_DB_PATH))
     args = p.parse_args(argv)
 
     conn = connect(Path(args.db).expanduser().resolve())
     try:
-        if args.command == "top-ads":
-            print_rows(top_ads(conn, args.date_from, args.date_to, args.kpi_name, args.limit))
+        if args.command == "summary":
+            print_rows(summary(conn, args.date_from, args.date_to))
+        elif args.command == "daily-cac":
+            print_rows(daily_cac(conn, args.date_from, args.date_to))
+        elif args.command == "weekly-cac":
+            print_rows(weekly_cac(conn, args.date_from, args.date_to))
+        elif args.command == "top-media":
+            print_rows(top_entities(conn, args.date_from, args.date_to, "media_source", args.limit))
+        elif args.command == "top-campaigns":
+            print_rows(top_entities(conn, args.date_from, args.date_to, "campaign", args.limit))
+        elif args.command == "top-adsets":
+            print_rows(top_entities(conn, args.date_from, args.date_to, "adset", args.limit))
+        elif args.command == "top-ads":
+            print_rows(top_entities(conn, args.date_from, args.date_to, "ad", args.limit))
     finally:
         conn.close()
 
