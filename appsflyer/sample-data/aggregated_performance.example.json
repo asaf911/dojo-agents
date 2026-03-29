@@ -1,0 +1,21 @@
+{
+  "rows": [
+    {
+      "app_id": "com.dojo.app",
+      "app_name": "Dojo",
+      "platform": "ios",
+      "media_source": "facebook_ads",
+      "campaign": "trial_push_us",
+      "campaign_id": "cmp_123",
+      "adset": "broad_us",
+      "adset_id": "adset_456",
+      "ad": "video_a",
+      "ad_id": "ad_789",
+      "country": "US",
+      "impressions": 10000,
+      "clicks": 420,
+      "installs": 95,
+      "cost": 380.5
+    }
+  ]
+}

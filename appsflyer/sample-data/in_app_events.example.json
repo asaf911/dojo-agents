@@ -1,0 +1,20 @@
+{
+  "rows": [
+    {
+      "app_id": "com.dojo.app",
+      "app_name": "Dojo",
+      "platform": "ios",
+      "media_source": "facebook_ads",
+      "campaign": "trial_push_us",
+      "campaign_id": "cmp_123",
+      "adset": "broad_us",
+      "adset_id": "adset_456",
+      "ad": "video_a",
+      "ad_id": "ad_789",
+      "country": "US",
+      "event_name": "af_start_trial",
+      "event_count": 24,
+      "revenue": 0
+    }
+  ]
+}
