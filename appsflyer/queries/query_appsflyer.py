@@ -2,9 +2,9 @@
 """
 Query the local AppsFlyer SQLite cache (daily_performance).
 
-Requires data ingested by fetcher/fetch_appsflyer.py. Media-source and campaign
-breakdowns only populate when the ingested report includes those dimensions
-(choose the appropriate AppsFlyer aggregate export / segment when fetching).
+Requires data ingested by fetcher/fetch_appsflyer.py. Dimension columns only
+populate when the aggregate CSV includes them (ad/adset depend on report type
+and ad network).
 """
 
 from __future__ import annotations
@@ -77,6 +77,47 @@ def campaigns(conn: sqlite3.Connection, date_from: str, date_to: str) -> list[sq
     return list(conn.execute(sql, (date_from, date_to)))
 
 
+def adsets(conn: sqlite3.Connection, date_from: str, date_to: str) -> list[sqlite3.Row]:
+    sql = """
+    SELECT
+        COALESCE(adset, '(unknown)') AS adset,
+        COALESCE(campaign, '(unknown)') AS campaign,
+        COALESCE(media_source, '(unknown)') AS media_source,
+        SUM(COALESCE(impressions, 0)) AS impressions,
+        SUM(COALESCE(clicks, 0)) AS clicks,
+        SUM(COALESCE(installs, 0)) AS installs,
+        SUM(COALESCE(sessions, 0)) AS sessions,
+        SUM(COALESCE(revenue, 0)) AS revenue,
+        SUM(COALESCE(cost, 0)) AS cost
+    FROM daily_performance
+    WHERE report_date >= ? AND report_date <= ?
+    GROUP BY 1, 2, 3
+    ORDER BY COALESCE(installs, 0) DESC, COALESCE(revenue, 0) DESC
+    """
+    return list(conn.execute(sql, (date_from, date_to)))
+
+
+def ads(conn: sqlite3.Connection, date_from: str, date_to: str) -> list[sqlite3.Row]:
+    sql = """
+    SELECT
+        COALESCE(ad, '(unknown)') AS ad,
+        COALESCE(adset, '(unknown)') AS adset,
+        COALESCE(campaign, '(unknown)') AS campaign,
+        COALESCE(media_source, '(unknown)') AS media_source,
+        SUM(COALESCE(impressions, 0)) AS impressions,
+        SUM(COALESCE(clicks, 0)) AS clicks,
+        SUM(COALESCE(installs, 0)) AS installs,
+        SUM(COALESCE(sessions, 0)) AS sessions,
+        SUM(COALESCE(revenue, 0)) AS revenue,
+        SUM(COALESCE(cost, 0)) AS cost
+    FROM daily_performance
+    WHERE report_date >= ? AND report_date <= ?
+    GROUP BY 1, 2, 3, 4
+    ORDER BY COALESCE(installs, 0) DESC, COALESCE(revenue, 0) DESC
+    """
+    return list(conn.execute(sql, (date_from, date_to)))
+
+
 def print_rows(rows: list[sqlite3.Row]) -> None:
     if not rows:
         print("(no rows)")
@@ -110,6 +151,12 @@ def main(argv: list[str] | None = None) -> None:
     p_c = sub.add_parser("campaigns", help="Breakdown by campaign (and media_source)")
     _add_range_args(p_c)
 
+    p_as = sub.add_parser("adsets", help="Breakdown by ad set (+ campaign, media_source)")
+    _add_range_args(p_as)
+
+    p_ad = sub.add_parser("ads", help="Breakdown by ad (+ ad set, campaign, media_source)")
+    _add_range_args(p_ad)
+
     args = root.parse_args(argv)
     db_path = Path(args.db).expanduser().resolve()
     conn = connect(db_path)
@@ -120,6 +167,10 @@ def main(argv: list[str] | None = None) -> None:
             print_rows(media_sources(conn, args.date_from, args.date_to))
         elif args.command == "campaigns":
             print_rows(campaigns(conn, args.date_from, args.date_to))
+        elif args.command == "adsets":
+            print_rows(adsets(conn, args.date_from, args.date_to))
+        elif args.command == "ads":
+            print_rows(ads(conn, args.date_from, args.date_to))
     finally:
         conn.close()
 

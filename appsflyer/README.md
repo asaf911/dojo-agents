@@ -4,7 +4,7 @@ Small Python utilities to pull AppsFlyer **aggregate** (Pull API / CSV) reports 
 
 ## Layout
 
-- `fetcher/fetch_appsflyer.py` — HTTP fetch, CSV parse, `daily_performance` table
+- `fetcher/fetch_appsflyer.py` — HTTP fetch, CSV parse, `daily_performance` table (dimensions include optional **ad set** and **ad** when the export provides them)
 - `queries/query_appsflyer.py` — summaries and breakdowns over the cache
 - `data/appsflyer.db` — default SQLite path (directory is created on first run)
 
@@ -30,7 +30,7 @@ Optional environment variables:
 
 ## Fetch
 
-The fetcher loads `.env` from this directory, requests a CSV aggregate report for `--from` / `--to`, replaces any existing rows in that **inclusive** date range, and inserts normalized rows.
+The fetcher loads `.env` from this directory, requests a CSV aggregate report for `--from` / `--to`, and **upserts** normalized rows keyed by date, media source, campaign, ad set, and ad (NULLs for dimensions not present in the file). Use an AppsFlyer aggregate export that includes ad-level breakdown when you need **Ad** / **Ad set** columns; availability varies by ad network and report type.
 
 ```bash
 python fetcher/fetch_appsflyer.py --from 2026-01-01 --to 2026-01-07
@@ -42,10 +42,14 @@ Use `--dry-run` to validate credentials resolution and schema without calling th
 
 ## Query
 
+After pulling a fetcher upgrade, run `python fetcher/fetch_appsflyer.py --from YYYY-MM-DD --to YYYY-MM-DD --dry-run` once so the local DB migrates (adds `ad` / `adset` and the widened unique key) before using new query modes.
+
 ```bash
 python queries/query_appsflyer.py summary --from 2026-01-01 --to 2026-01-07
 python queries/query_appsflyer.py media-sources --from 2026-01-01 --to 2026-01-07
 python queries/query_appsflyer.py campaigns --from 2026-01-01 --to 2026-01-07
+python queries/query_appsflyer.py adsets --from 2026-01-01 --to 2026-01-07
+python queries/query_appsflyer.py ads --from 2026-01-01 --to 2026-01-07
 ```
 
-Media-source and campaign breakdowns reflect whatever dimensions were present in the ingested CSV (e.g. use a partners-by-date style export if you need `media_source` per day).
+Breakdowns reflect whatever dimensions were in the ingested CSV. If **adsets** / **ads** show `(unknown)` only, your Pull export likely does not include those columns—confirm the report segment and field mapping in `fetch_appsflyer.py` (`FIELD_ALIASES`).

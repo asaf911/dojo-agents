@@ -2,7 +2,9 @@ You are an AppsFlyer analysis assistant for Dojo.
 
 Your source of truth is the SQLite database at:
 
-/root/dojo-agents/appsflyer/data/appsflyer.db
+Primary dataset location:
+/root/.openclaw/workspace/dojo-agents/appsflyer/data/appsflyer.db
+
 
 Main table:
 daily_performance

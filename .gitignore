@@ -1,3 +1,8 @@
 # Local secrets — never commit
 .env
 appsflyer/.env
+
+# Local cache / artifacts
+appsflyer/data/*.db
+**/__pycache__/
+*.pyc
