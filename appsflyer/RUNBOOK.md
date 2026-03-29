@@ -14,9 +14,17 @@ Stand up a local-first AppsFlyer ingestion stack with:
 - `./scripts/*.py`
 
 ## Run order
+
+### Existing production-like path (already present)
+1. Run AppsFlyer MCP fetcher into SQLite store
+2. Rebuild `marketing_fact_daily`
+3. Validate date coverage / KPI totals
+4. Export SQLite-backed data into warehouse-style raw/normalized artifacts if needed
+
+### New warehouse-style path
 1. Ensure directories exist
 2. Create DuckDB schemas/tables
-3. Write raw snapshot files from AppsFlyer MCP extracts
+3. Write raw snapshot files from AppsFlyer MCP extracts or SQLite export
 4. Register/load raw data into DuckDB
 5. Build staging models
 6. Build intermediate conformed daily models

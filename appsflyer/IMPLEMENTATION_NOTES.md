@@ -18,10 +18,16 @@
 - Example payloads exist for performance + in-app events
 
 ## What is not done yet
-- MCP extraction client for AppsFlyer
 - actual scheduled job orchestration
-- dependency installation (`duckdb` Python package missing in current environment)
-- real source validation against live AppsFlyer exports
+- dependency installation for the DuckDB branch of the scaffold if we want to use that path
+- formal validation against AppsFlyer dashboard exports for reconciliation signoff
+- final consolidation between the existing SQLite production path and the newer warehouse-style scaffold
+
+## What changed after deeper inspection
+- A working AppsFlyer MCP fetcher already exists in this repo
+- A populated SQLite store already exists at `appsflyer/data/appsflyer.db`
+- 2026 YTD coverage is present in the current normalized store
+- The immediate task is therefore migration/formalization, not greenfield ingestion from zero
 
 ## Immediate next coding steps
 1. Add an AppsFlyer MCP extraction script that writes JSON snapshots into `data/appsflyer/raw/...`
