@@ -12,13 +12,54 @@ import os
 import time
 from collections.abc import Callable
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
 
 MAX_ATTEMPTS = 5
 BACKOFF_START_SEC = 0.5
+
+DEFAULT_BUSINESS_TIMEZONE = "America/Los_Angeles"
+_UTC_ZONE = ZoneInfo("UTC")
+
+
+def business_timezone_name() -> str:
+    """IANA timezone for reporting (Pull API, gold `fact_date` alignment). Override via APPSFLYER_BUSINESS_TIMEZONE."""
+    load_dotenv(project_root() / ".env")
+    raw = os.environ.get("APPSFLYER_BUSINESS_TIMEZONE", DEFAULT_BUSINESS_TIMEZONE).strip()
+    return raw or DEFAULT_BUSINESS_TIMEZONE
+
+
+@lru_cache(maxsize=16)
+def _zoneinfo_named(name: str) -> ZoneInfo:
+    return ZoneInfo(name)
+
+
+def business_zoneinfo() -> ZoneInfo:
+    return _zoneinfo_named(business_timezone_name())
+
+
+def utc_calendar_date_to_business_date(iso_date: str) -> str:
+    """
+    Map a vendor UTC calendar day (YYYY-MM-DD at 00:00:00 UTC) to the business calendar date.
+
+    Used when AppsFlyer MCP returns UTC-dated rows: the instant midnight UTC falls on the prior
+    calendar day in Los Angeles for part of the year (e.g. 2026-03-31Z -> 2026-03-30 in LA PDT).
+    DST is handled by ZoneInfo (astimezone).
+    """
+    dt = datetime.strptime(iso_date, "%Y-%m-%d").replace(tzinfo=_UTC_ZONE)
+    return dt.astimezone(business_zoneinfo()).date().isoformat()
+
+
+def is_utc_like_report_tz(tz: str | None) -> bool:
+    """True if MCP (or similar) metadata indicates calendar dates are UTC, not business TZ."""
+    if tz is None or not str(tz).strip():
+        return True
+    t = str(tz).strip().upper().replace(" ", "_")
+    return t in ("UTC", "GMT", "ETC/UTC", "ETC/GMT", "Z")
 
 
 def project_root() -> Path:

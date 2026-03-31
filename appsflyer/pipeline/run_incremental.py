@@ -14,15 +14,16 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
-
 _APPSFLYER_DIR = Path(__file__).resolve().parent.parent
+if str(_APPSFLYER_DIR) not in sys.path:
+    sys.path.insert(0, str(_APPSFLYER_DIR))
 
+import common
 from dotenv import load_dotenv
 
 from pipeline.apply_sqlite_views import apply_views
 
-LA = ZoneInfo("America/Los_Angeles")
+LA = common.business_zoneinfo()
 DEFAULT_DB = _APPSFLYER_DIR / "data" / "appsflyer.db"
 ARTIFACTS_DIR = _APPSFLYER_DIR / "data" / "artifacts"
 MANIFEST_PATH = ARTIFACTS_DIR / "run_manifest.json"
@@ -281,7 +282,8 @@ def main(argv: list[str] | None = None) -> int:
     manifest = {
         "version": 1,
         "finished_at": datetime.now(tz=LA).isoformat(),
-        "business_timezone": "America/Los_Angeles",
+        "business_timezone": common.business_timezone_name(),
+        "gold_fact_date_semantics": "Los_Angeles_calendar_date",
         "date_from": date_from,
         "date_to": date_to,
         "lookback_days": args.lookback_days,

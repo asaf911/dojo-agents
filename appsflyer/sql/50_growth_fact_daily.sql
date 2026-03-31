@@ -1,6 +1,8 @@
--- Canonical LA-aligned growth facts (initial hybrid model)
--- Pull API truth is preferred for daily totals / business-day buckets.
--- MCP remains available for richer exploratory dimensions and provenance.
+DROP VIEW IF EXISTS growth_merged_slice_la;
+
+-- Hybrid facts: Pull rows plus MCP rows where no Pull slice exists (same date + dims).
+-- In-app counts on Pull rows may be 0 while MCP has data; see growth_daily_totals_la
+-- for day-level reconciliation (MAX of Pull vs MCP sums).
 
 DROP VIEW IF EXISTS growth_fact_daily;
 
@@ -51,15 +53,15 @@ mcp AS (
 combined AS (
   SELECT * FROM pull
   UNION ALL
-  SELECT * FROM mcp
+  SELECT * FROM mcp m
   WHERE NOT EXISTS (
     SELECT 1
     FROM pull p
-    WHERE p.fact_date = mcp.fact_date
-      AND COALESCE(p.media_source,'') = COALESCE(mcp.media_source,'')
-      AND COALESCE(p.campaign,'') = COALESCE(mcp.campaign,'')
-      AND COALESCE(p.adset,'') = COALESCE(mcp.adset,'')
-      AND COALESCE(p.ad,'') = COALESCE(mcp.ad,'')
+    WHERE p.fact_date = m.fact_date
+      AND COALESCE(p.media_source,'') = COALESCE(m.media_source,'')
+      AND COALESCE(p.campaign,'') = COALESCE(m.campaign,'')
+      AND COALESCE(p.adset,'') = COALESCE(m.adset,'')
+      AND COALESCE(p.ad,'') = COALESCE(m.ad,'')
   )
 )
 SELECT *

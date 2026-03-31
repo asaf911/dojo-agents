@@ -21,8 +21,9 @@ import os
 import sqlite3
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections import defaultdict
 from typing import Any
 
 import requests
@@ -229,6 +230,12 @@ def _parse_float(v: str | None) -> float | None:
         return None
 
 
+def _normalize_mcp_fact_date_for_storage(fact_date_str: str, report_tz: str | None) -> str:
+    if common.is_utc_like_report_tz(report_tz):
+        return common.utc_calendar_date_to_business_date(fact_date_str)
+    return fact_date_str
+
+
 def _normalize_fact_date(v: str | None, fallback_from: str, fallback_to: str) -> str | None:
     if v and str(v).strip():
         return str(v).strip()
@@ -378,6 +385,14 @@ def rebuild_marketing_fact_daily(conn: sqlite3.Connection, date_from: str, date_
     # Canonical pick rule per (fact_date, media_source, campaign, adset, ad, kpi_name):
     # 1) narrowest fetch window wins
     # 2) if tied, latest fetched_at wins
+    #
+    # Read one extra UTC calendar day: a UTC "next day" row can map to the LA date_to
+    # (e.g. subscribe on 2026-03-31 UTC → 2026-03-30 America/Los_Angeles).
+    d_to = datetime.strptime(date_to, "%Y-%m-%d").date()
+    d_from = datetime.strptime(date_from, "%Y-%m-%d").date()
+    source_date_hi = (d_to + timedelta(days=1)).isoformat()
+    delete_lo = (d_from - timedelta(days=1)).isoformat()
+
     rows = conn.execute(
         """
         WITH ranked AS (
@@ -429,35 +444,79 @@ def rebuild_marketing_fact_daily(conn: sqlite3.Connection, date_from: str, date_
         FROM canonical
         GROUP BY fact_date, media_source, campaign, adset, ad
         """,
-        (date_from, date_to),
+        (date_from, source_date_hi),
     ).fetchall()
 
+    merged: dict[tuple[str, str | None, str | None, str | None, str | None], dict[str, Any]] = defaultdict(
+        lambda: {
+            "installs": 0.0,
+            "spend": 0.0,
+            "af_start_trial": 0.0,
+            "af_subscribe": 0.0,
+            "af_tutorial_completion": 0.0,
+            "rc_trial_converted_event": 0.0,
+            "arpu_ltv": None,
+            "currency": None,
+            "timezone": None,
+            "fetched_at": None,
+        }
+    )
+    for row in rows:
+        la_fd = _normalize_mcp_fact_date_for_storage(row["fact_date"], row["timezone"])
+        if la_fd < date_from or la_fd > date_to:
+            continue
+        key = (
+            la_fd,
+            row["media_source"],
+            row["campaign"],
+            row["adset"],
+            row["ad"],
+        )
+        acc = merged[key]
+        acc["installs"] += float(row["installs"] or 0)
+        acc["spend"] += float(row["spend"] or 0)
+        acc["af_start_trial"] += float(row["af_start_trial"] or 0)
+        acc["af_subscribe"] += float(row["af_subscribe"] or 0)
+        acc["af_tutorial_completion"] += float(row["af_tutorial_completion"] or 0)
+        acc["rc_trial_converted_event"] += float(row["rc_trial_converted_event"] or 0)
+        if row["arpu_ltv"] is not None:
+            acc["arpu_ltv"] = row["arpu_ltv"] if acc["arpu_ltv"] is None else max(acc["arpu_ltv"], row["arpu_ltv"])
+        acc["currency"] = row["currency"] or acc["currency"]
+        rt = row["timezone"]
+        acc["timezone"] = (
+            common.business_timezone_name()
+            if common.is_utc_like_report_tz(rt)
+            else (rt or acc["timezone"] or common.business_timezone_name())
+        )
+        fa = row["fetched_at"]
+        if fa and (acc["fetched_at"] is None or fa > acc["fetched_at"]):
+            acc["fetched_at"] = fa
+
     cur = conn.cursor()
-    # Clear the rebuilt date range first so stale duplicated rows don't survive.
     cur.execute(
         "DELETE FROM marketing_fact_daily WHERE fact_date BETWEEN ? AND ? AND source_system = 'appsflyer_mcp'",
-        (date_from, date_to),
+        (delete_lo, date_to),
     )
     n = 0
-    for row in rows:
+    for (la_fd, ms, camp, adset, ad), acc in merged.items():
         cur.execute(
             UPSERT_MARKETING_DAILY,
             {
-                "fact_date": row["fact_date"],
-                "media_source": row["media_source"],
-                "campaign": row["campaign"],
-                "adset": row["adset"],
-                "ad": row["ad"],
-                "installs": row["installs"],
-                "spend": row["spend"],
-                "af_start_trial": row["af_start_trial"],
-                "af_subscribe": row["af_subscribe"],
-                "af_tutorial_completion": row["af_tutorial_completion"],
-                "rc_trial_converted_event": row["rc_trial_converted_event"],
-                "arpu_ltv": row["arpu_ltv"],
-                "currency": row["currency"],
-                "timezone": row["timezone"],
-                "fetched_at": row["fetched_at"] or datetime.now(timezone.utc).isoformat(),
+                "fact_date": la_fd,
+                "media_source": ms,
+                "campaign": camp,
+                "adset": adset,
+                "ad": ad,
+                "installs": acc["installs"],
+                "spend": acc["spend"],
+                "af_start_trial": acc["af_start_trial"],
+                "af_subscribe": acc["af_subscribe"],
+                "af_tutorial_completion": acc["af_tutorial_completion"],
+                "rc_trial_converted_event": acc["rc_trial_converted_event"],
+                "arpu_ltv": acc["arpu_ltv"],
+                "currency": acc["currency"],
+                "timezone": acc["timezone"],
+                "fetched_at": acc["fetched_at"] or datetime.now(timezone.utc).isoformat(),
             },
         )
         n += 1
@@ -472,8 +531,14 @@ def run(date_from: str, date_to: str, *, db_path: Path, row_count: int, dry_run:
     if not app_id or not mcp_token:
         raise RuntimeError("Missing APPSFLYER_APP_ID or APPSFLYER_MCP_TOKEN in appsflyer/.env")
 
+    d_to = datetime.strptime(date_to, "%Y-%m-%d").date()
+    fetch_to = (d_to + timedelta(days=1)).isoformat()
+
     if dry_run:
-        print(f"[dry-run] MCP URL={MCP_URL} app_id={app_id} from={date_from} to={date_to} kpis={len(KPI_SPECS)} row_count={row_count}")
+        print(
+            f"[dry-run] MCP URL={MCP_URL} app_id={app_id} from={date_from} to={fetch_to} "
+            f"(fetch end +1d for UTC→LA) rebuild_to={date_to} kpis={len(KPI_SPECS)} row_count={row_count}"
+        )
         return (0, 0)
 
     conn = connect_db(db_path)
@@ -481,7 +546,7 @@ def run(date_from: str, date_to: str, *, db_path: Path, row_count: int, dry_run:
         init_schema(conn)
         all_rows: list[dict[str, Any]] = []
         for spec in KPI_SPECS:
-            all_rows.extend(fetch_kpi_rows(mcp_token, app_id, date_from, date_to, spec, row_count=row_count))
+            all_rows.extend(fetch_kpi_rows(mcp_token, app_id, date_from, fetch_to, spec, row_count=row_count))
 
         cur = conn.cursor()
         source_n = 0
