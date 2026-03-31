@@ -5,5 +5,11 @@ appsflyer/.env
 # Local cache / artifacts
 appsflyer/data/*.db
 appsflyer/data/master_raw/*
+appsflyer/data/artifacts/
+appsflyer/data/logs/
+appsflyer/data/raw/
+appsflyer/data/warehouse_exports/
+appsflyer/data/*.sse
+appsflyer/data/fetch_aggregated_data_schema.json
 **/__pycache__/
 *.pyc

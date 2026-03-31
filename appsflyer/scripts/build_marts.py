@@ -1,9 +1,10 @@
 from pathlib import Path
 import duckdb
 
-ROOT = Path(__file__).resolve().parents[3]
-DB_PATH = ROOT / 'data' / 'warehouse' / 'dojo_marketing.duckdb'
-SQL_DIR = ROOT / 'dojo-agents' / 'appsflyer' / 'sql'
+# Experimental DuckDB warehouse (not the SQLite SoT used by agents). See docs/DATA_LAYERS.md.
+_APPSFLYER_ROOT = Path(__file__).resolve().parents[1]
+DB_PATH = _APPSFLYER_ROOT / 'data' / 'warehouse' / 'dojo_marketing.duckdb'
+SQL_DIR = _APPSFLYER_ROOT / 'sql'
 
 conn = duckdb.connect(str(DB_PATH))
 for name in [

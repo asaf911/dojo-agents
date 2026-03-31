@@ -1,0 +1,8 @@
+# AppsFlyer incremental pipeline — copy lines to `crontab -e` (runs as the same user that owns the repo).
+# Logs: data/logs/pipeline-YYYYMMDD.log (see run_incremental.sh).
+# Pull API may return 403 "Limit reached"; the runner retries (see APPSFLYER_PULL_* below).
+#
+# Optional env (prefix line or use cron's BASH_ENV):
+# APPSFLYER_SYNC_LOOKBACK_DAYS=3 APPSFLYER_PULL_MAX_RETRIES=4 APPSFLYER_PULL_RETRY_SLEEP_SEC=120
+
+0 */4 * * * /root/dojo-agents/appsflyer/pipeline/run_incremental.sh

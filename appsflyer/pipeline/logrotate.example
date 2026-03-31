@@ -1,0 +1,9 @@
+# Optional: install as /etc/logrotate.d/dojo-appsflyer-pipeline (adjust user/group).
+/root/dojo-agents/appsflyer/data/logs/*.log {
+  weekly
+  rotate 8
+  compress
+  missingok
+  notifempty
+  copytruncate
+}

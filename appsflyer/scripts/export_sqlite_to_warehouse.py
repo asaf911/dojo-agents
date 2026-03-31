@@ -7,10 +7,10 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-SQLITE_PATH = ROOT / 'appsflyer' / 'data' / 'appsflyer.db'
-RAW_ROOT = ROOT / 'appsflyer' / 'data' / 'raw'
-WAREHOUSE_ROOT = ROOT / 'appsflyer' / 'data' / 'warehouse_exports'
+_APPSFLYER_ROOT = Path(__file__).resolve().parents[1]
+SQLITE_PATH = _APPSFLYER_ROOT / 'data' / 'appsflyer.db'
+RAW_ROOT = _APPSFLYER_ROOT / 'data' / 'raw'
+WAREHOUSE_ROOT = _APPSFLYER_ROOT / 'data' / 'warehouse_exports'
 
 SOURCE_QUERY = '''
 select

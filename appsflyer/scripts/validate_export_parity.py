@@ -5,10 +5,11 @@ import json
 import sqlite3
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-SQLITE_PATH = ROOT / 'appsflyer' / 'data' / 'appsflyer.db'
-EXPORT_PATH = ROOT / 'appsflyer' / 'data' / 'warehouse_exports' / 'marketing_fact_daily.json'
-SUMMARY_PATH = ROOT / 'appsflyer' / 'data' / 'warehouse_exports' / 'parity_summary.json'
+# appsflyer package root (parent of scripts/)
+_APPSFLYER_ROOT = Path(__file__).resolve().parents[1]
+SQLITE_PATH = _APPSFLYER_ROOT / 'data' / 'appsflyer.db'
+EXPORT_PATH = _APPSFLYER_ROOT / 'data' / 'warehouse_exports' / 'marketing_fact_daily.json'
+SUMMARY_PATH = _APPSFLYER_ROOT / 'data' / 'warehouse_exports' / 'parity_summary.json'
 
 KEYS = ['fact_date', 'source_system', 'media_source', 'campaign', 'adset', 'ad']
 METRICS = ['installs', 'spend', 'af_start_trial', 'af_subscribe', 'af_tutorial_completion', 'rc_trial_converted_event', 'arpu_ltv']
