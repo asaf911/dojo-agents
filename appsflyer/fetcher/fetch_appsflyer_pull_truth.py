@@ -86,6 +86,7 @@ FIELD_ALIASES = {
     'adset': 'adset',
     'ad': 'ad',
     'installs': 'installs',
+    'conversions': 'installs',
     'clicks': 'clicks',
     'impressions': 'impressions',
     'total cost': 'cost',
@@ -167,7 +168,8 @@ def _parse_float(v: str | None):
         return None
 
 
-def build_pull_url(app_id: str, date_from: str, date_to: str, report_segment: str) -> str:
+def build_pull_url(app_id: str, date_from: str, date_to: str, report_segment: str,
+                    *, reattr: bool = False) -> str:
     base = DEFAULT_AGG_BASE.rstrip('/')
     path = f"{base}/{app_id}/{report_segment}/v5"
     qp = {
@@ -175,18 +177,21 @@ def build_pull_url(app_id: str, date_from: str, date_to: str, report_segment: st
         'to': date_to,
         'timezone': common.business_timezone_name(),
     }
+    if reattr:
+        qp['reattr'] = 'true'
     ordered = sorted(qp.items())
     q = '&'.join(f"{k}={quote(v, safe='')}" for k, v in ordered)
     return f"{path}?{q}"
 
 
-def fetch_csv(date_from: str, date_to: str, report_segment: str) -> tuple[str, str | None]:
+def fetch_csv(date_from: str, date_to: str, report_segment: str,
+              *, reattr: bool = False) -> tuple[str, str | None]:
     load_dotenv(common.project_root() / '.env')
     app_id = os.environ.get('APPSFLYER_APP_ID', '').strip()
     token = os.environ.get('APPSFLYER_API_TOKEN', '').strip()
     if not app_id or not token:
         raise RuntimeError('Missing APPSFLYER_APP_ID or APPSFLYER_API_TOKEN in appsflyer/.env')
-    url = build_pull_url(app_id, date_from, date_to, report_segment)
+    url = build_pull_url(app_id, date_from, date_to, report_segment, reattr=reattr)
     return common.get_with_retries(url, token, accept='text/csv, text/plain, */*', timeout_sec=180.0)
 
 
@@ -299,6 +304,89 @@ def dedupe_pull_daily_truth(conn: sqlite3.Connection) -> int:
     return max(0, before - after)
 
 
+def _dates_with_cost(rows: list[dict]) -> set[str]:
+    """Return the set of fact_dates where at least one row has cost > 0."""
+    cost_dates: set[str] = set()
+    for r in rows:
+        c = r.get('cost')
+        if c is not None and c > 0 and r.get('fact_date'):
+            cost_dates.add(r['fact_date'])
+    return cost_dates
+
+
+def _existing_dates_with_cost(conn: sqlite3.Connection, date_from: str, date_to: str,
+                               report_segment: str, tz: str) -> set[str]:
+    """Return dates in the DB that already have cost > 0."""
+    cur = conn.execute(
+        """
+        SELECT DISTINCT fact_date FROM appsflyer_pull_daily_truth
+        WHERE fact_date >= ? AND fact_date <= ?
+          AND report_segment = ? AND timezone = ?
+          AND cost IS NOT NULL AND cost > 0
+        """,
+        (date_from, date_to, report_segment, tz),
+    )
+    return {r[0] for r in cur.fetchall()}
+
+
+REATTR_SEGMENT_SUFFIX = '_reattr'
+
+
+def _fetch_retargeting(date_from: str, date_to: str, report_segment: str,
+                       conn: sqlite3.Connection, tz: str) -> int:
+    """Fetch retargeting data (re-attributions + re-engagements) and add to the truth table.
+
+    The dashboard "Non-organic" count includes re-attributions and re-engagements.
+    The standard partners_by_date_report omits them.  Adding reattr=true captures
+    these as "Conversions" which we map to the installs column.
+    """
+    reattr_segment = report_segment + REATTR_SEGMENT_SUFFIX
+    try:
+        text, _ = fetch_csv(date_from, date_to, report_segment, reattr=True)
+    except RuntimeError as exc:
+        print(f'Retargeting fetch skipped (non-fatal): {exc}', file=sys.stderr)
+        return 0
+
+    raw_rows = rows_from_csv(text)
+    normalized = []
+    for raw in raw_rows:
+        row = normalize_row(raw, reattr_segment)
+        if not row['fact_date']:
+            continue
+        for col in ('cost', 'revenue', 'clicks', 'impressions',
+                    'af_start_trial', 'af_subscribe',
+                    'rc_trial_converted_event', 'af_tutorial_completion'):
+            row[col] = None
+        conv_type = ''
+        for k, v in raw.items():
+            if k.strip().lower() == 'conversion type':
+                conv_type = _dim_key(v)
+                break
+        row['ad'] = conv_type or 'retargeting'
+        normalized.append(row)
+
+    if not normalized:
+        return 0
+
+    cur = conn.cursor()
+    cur.execute(
+        """
+        DELETE FROM appsflyer_pull_daily_truth
+        WHERE fact_date >= ? AND fact_date <= ?
+          AND report_segment = ? AND timezone = ?
+        """,
+        (date_from, date_to, reattr_segment, tz),
+    )
+    n = 0
+    for row in normalized:
+        cur.execute(INSERT_ROW, row)
+        n += 1
+    conn.commit()
+    if n:
+        print(f'Loaded {n} retargeting row(s) (re-attributions + re-engagements)', file=sys.stderr)
+    return n
+
+
 def run(date_from: str, date_to: str, *, db_path: Path, report_segment: str, dry_run: bool = False) -> int:
     if dry_run:
         text, _ = fetch_csv(date_from, date_to, report_segment)
@@ -306,32 +394,55 @@ def run(date_from: str, date_to: str, *, db_path: Path, report_segment: str, dry
         return 0
 
     text, _ = fetch_csv(date_from, date_to, report_segment)
-    rows = rows_from_csv(text)
+    raw_rows = rows_from_csv(text)
+    normalized = [normalize_row(r, report_segment) for r in raw_rows]
+    normalized = [r for r in normalized if r['fact_date']]
+
     conn = connect_db(db_path)
     try:
         init_schema(conn)
+        tz = common.business_timezone_name()
+
+        new_cost_dates = _dates_with_cost(normalized)
+        old_cost_dates = _existing_dates_with_cost(conn, date_from, date_to, report_segment, tz)
+
+        all_dates: set[str] = {r['fact_date'] for r in normalized}
+        skip_dates = old_cost_dates - new_cost_dates
+        replace_dates = all_dates - skip_dates
+
+        if skip_dates:
+            print(
+                f'Preserving {len(skip_dates)} date(s) where Pull cost data expired '
+                f'but DB has good cost: {sorted(skip_dates)}',
+                file=sys.stderr,
+            )
+
         cur = conn.cursor()
-        cur.execute(
-            """
-            DELETE FROM appsflyer_pull_daily_truth
-            WHERE fact_date >= ? AND fact_date <= ?
-              AND report_segment = ?
-              AND timezone = ?
-            """,
-            (date_from, date_to, report_segment, common.business_timezone_name()),
-        )
+        for d in sorted(replace_dates):
+            cur.execute(
+                """
+                DELETE FROM appsflyer_pull_daily_truth
+                WHERE fact_date = ?
+                  AND report_segment = ?
+                  AND timezone = ?
+                """,
+                (d, report_segment, tz),
+            )
+
         n = 0
-        for raw in rows:
-            row = normalize_row(raw, report_segment)
-            if not row['fact_date']:
+        for row in normalized:
+            if row['fact_date'] in skip_dates:
                 continue
             cur.execute(INSERT_ROW, row)
             n += 1
         conn.commit()
+
+        n_reattr = _fetch_retargeting(date_from, date_to, report_segment, conn, tz)
+
         removed = dedupe_pull_daily_truth(conn)
         if removed:
             print(f'Deduped {removed} duplicate pull-truth row(s) (NULL/empty dimension keys)', file=sys.stderr)
-        return n
+        return n + n_reattr
     finally:
         conn.close()
 

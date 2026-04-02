@@ -1,23 +1,16 @@
--- Canonical LA daily totals (LTV attribution): Pull-primary, MCP-fallback.
+-- Activity daily totals: event-date attribution from MCP, Pull-scaled.
 --
--- Pull API is the authoritative source — it matches the AppsFlyer dashboard.
--- MCP data is used when Pull's paid-media data has expired (Pull cost = $0
--- but MCP cost > $0).  The Pull API loses paid-media rows beyond its lookback
--- window, so stale dates report $0 cost while MCP retains the real values.
+-- MCP Unique users metrics are cumulative (inflated vs dashboard).
+-- We scale MCP Activity to Pull media-source totals for correct absolute
+-- numbers, same approach as LTV gold views.  At the daily-total level this
+-- makes Activity = LTV, but preserves the Activity proportional distribution
+-- at granular (adset/ad) levels.
 --
--- Rule:  if Pull.cost > 0 → use Pull (reliable, matches dashboard)
---        if Pull.cost = 0 AND MCP.cost > 0 → use MCP (Pull is stale)
---        if MCP only → use MCP
---
--- Revenue: Pull only (MCP does not fetch revenue).
--- Note: Pull revenue is install-date LTV — it accumulates over time as cohort
--- users make purchases.  The AppsFlyer dashboard "Unified" view may show
--- event-day revenue which is a different attribution model.  Re-fetching
--- with a wider lookback lets LTV catch up.
+-- When Master API becomes available, replace with direct Activity data.
 
-DROP VIEW IF EXISTS growth_daily_totals_la;
+DROP VIEW IF EXISTS activity_daily_totals_la;
 
-CREATE VIEW growth_daily_totals_la AS
+CREATE VIEW activity_daily_totals_la AS
 WITH
 pull_day AS (
   SELECT
@@ -26,7 +19,6 @@ pull_day AS (
     SUM(COALESCE(cost, 0)) AS spend,
     SUM(COALESCE(af_start_trial, 0)) AS af_start_trial,
     SUM(COALESCE(af_subscribe, 0)) AS af_subscribe,
-    SUM(COALESCE(revenue, 0)) AS revenue,
     SUM(COALESCE(rc_trial_converted_event, 0)) AS rc_trial_converted_event,
     SUM(COALESCE(af_tutorial_completion, 0)) AS af_tutorial_completion,
     MAX(fetched_at) AS fetched_at
@@ -46,7 +38,7 @@ mcp_day AS (
     MAX(fetched_at) AS fetched_at
   FROM marketing_fact_daily
   WHERE source_system = 'appsflyer_mcp'
-    AND attribution_model = 'ltv'
+    AND attribution_model = 'activity'
   GROUP BY fact_date
 ),
 days AS (
@@ -68,12 +60,11 @@ use_pull AS (
 SELECT
   d.fact_date,
   'America/Los_Angeles' AS timezone,
-  'ltv' AS attribution_model,
+  'activity' AS attribution_model,
   CASE WHEN u.pull_wins = 1 THEN COALESCE(p.installs, 0) ELSE COALESCE(m.installs, 0) END AS installs,
   CASE WHEN u.pull_wins = 1 THEN COALESCE(p.spend, 0) ELSE COALESCE(m.spend, 0) END AS spend,
   CASE WHEN u.pull_wins = 1 THEN COALESCE(p.af_start_trial, 0) ELSE COALESCE(m.af_start_trial, 0) END AS af_start_trial,
   CASE WHEN u.pull_wins = 1 THEN COALESCE(p.af_subscribe, 0) ELSE COALESCE(m.af_subscribe, 0) END AS af_subscribe,
-  COALESCE(p.revenue, 0) AS revenue,
   CASE WHEN u.pull_wins = 1 THEN COALESCE(p.rc_trial_converted_event, 0) ELSE COALESCE(m.rc_trial_converted_event, 0) END AS rc_trial_converted_event,
   CASE WHEN u.pull_wins = 1 THEN COALESCE(p.af_tutorial_completion, 0) ELSE COALESCE(m.af_tutorial_completion, 0) END AS af_tutorial_completion,
   CASE
@@ -82,7 +73,7 @@ SELECT
          / (CASE WHEN u.pull_wins = 1 THEN COALESCE(p.af_subscribe, 0) ELSE COALESCE(m.af_subscribe, 0) END)
     ELSE NULL
   END AS cac,
-  CASE WHEN u.pull_wins = 1 THEN 'appsflyer_pull' ELSE 'appsflyer_mcp' END AS primary_source,
+  CASE WHEN u.pull_wins = 1 THEN 'appsflyer_pull' ELSE 'appsflyer_mcp_activity' END AS primary_source,
   CASE WHEN u.pull_wins = 1 THEN 'high' ELSE 'medium' END AS source_confidence,
   COALESCE(p.fetched_at, m.fetched_at) AS fetched_at
 FROM days d

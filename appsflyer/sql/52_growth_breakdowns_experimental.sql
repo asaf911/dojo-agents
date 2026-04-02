@@ -7,6 +7,7 @@ DROP VIEW IF EXISTS growth_breakdowns_experimental;
 CREATE VIEW growth_breakdowns_experimental AS
 SELECT
   fact_date,
+  attribution_model,
   media_source,
   campaign,
   adset,

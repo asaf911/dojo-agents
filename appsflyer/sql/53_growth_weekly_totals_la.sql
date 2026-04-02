@@ -1,4 +1,4 @@
--- Weekly LA-aligned totals derived from the validated daily totals layer.
+-- Weekly LA-aligned totals (LTV) derived from the validated daily totals layer.
 
 DROP VIEW IF EXISTS growth_weekly_totals_la;
 
@@ -7,6 +7,7 @@ SELECT
   strftime('%Y-W%W', fact_date) AS year_week,
   MIN(fact_date) AS week_start,
   MAX(fact_date) AS week_end,
+  'ltv' AS attribution_model,
   SUM(COALESCE(installs, 0)) AS installs,
   SUM(COALESCE(spend, 0)) AS spend,
   SUM(COALESCE(af_start_trial, 0)) AS af_start_trial,

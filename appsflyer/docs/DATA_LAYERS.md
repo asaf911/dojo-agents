@@ -29,4 +29,6 @@ Scripts `scripts/init_duckdb.py` and `scripts/build_marts.py` maintain an option
 
 ## Artifacts
 
-- **Run manifest:** `data/artifacts/run_manifest.json` — last pipeline status, date window, freshness summary, `business_timezone`, `gold_fact_date_semantics`.
+- **Run manifest:** `data/artifacts/run_manifest.json` — last pipeline status, date window, freshness summary, `business_timezone`, `gold_fact_date_semantics`, and **`ingest`** (`skip_pull` / `skip_mcp`, `pull_attempted` / `mcp_attempted`) so consumers know whether AppsFlyer fetches ran.
+- **OpenClaw marketing / appsflyer-ops workspaces** symlink this file and `data/appsflyer.db` as `data/artifacts/run_manifest.json` and `data/appsflyer.db` so workspace-scoped tools can read them.
+- **Rolling-window helper:** `scripts/growth_totals_summary.py` prints JSON aggregates from `growth_daily_totals_la` (read-only).

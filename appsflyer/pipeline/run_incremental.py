@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--lookback-days",
         type=int,
-        default=int(os.environ.get("APPSFLYER_SYNC_LOOKBACK_DAYS", "3")),
+        default=int(os.environ.get("APPSFLYER_SYNC_LOOKBACK_DAYS", "14")),
         help="LA calendar days to sync (inclusive, ending today LA)",
     )
     p.add_argument(
@@ -158,6 +158,11 @@ def main(argv: list[str] | None = None) -> int:
         "--skip-pull",
         action="store_true",
         help="Only MCP + views (no Pull API)",
+    )
+    p.add_argument(
+        "--skip-mcp-ad",
+        action="store_true",
+        help="Skip ad-level granular MCP fetch",
     )
     p.add_argument(
         "--validate",
@@ -213,6 +218,24 @@ def main(argv: list[str] | None = None) -> int:
         if info["exit_code"] != 0:
             overall_ok = False
 
+    if not args.skip_mcp_ad:
+        cmd = [
+            py,
+            str(_APPSFLYER_DIR / "fetcher" / "fetch_mcp_granular.py"),
+            "--from",
+            date_from,
+            "--to",
+            date_to,
+            "--db",
+            str(db_path),
+            "--row-count",
+            str(args.row_count),
+        ]
+        info = run_step("fetch_mcp_granular_ad", cmd, cwd=_APPSFLYER_DIR, env=env)
+        steps.append(info)
+        if info["exit_code"] != 0:
+            overall_ok = False
+
     fetch_steps = [s for s in steps if str(s.get("step", "")).startswith("fetch_")]
     fetch_all_ok = all(s.get("exit_code") == 0 for s in fetch_steps)
     any_fetch_ok = any(s.get("exit_code") == 0 for s in fetch_steps)
@@ -230,6 +253,13 @@ def main(argv: list[str] | None = None) -> int:
                         "51_growth_daily_totals_la.sql",
                         "52_growth_breakdowns_experimental.sql",
                         "53_growth_weekly_totals_la.sql",
+                        "54_growth_campaign_daily_la.sql",
+                        "55_growth_adset_daily_la.sql",
+                        "56_growth_ad_daily_la.sql",
+                        "60_activity_daily_totals_la.sql",
+                        "61_activity_campaign_daily_la.sql",
+                        "62_activity_adset_daily_la.sql",
+                        "63_activity_ad_daily_la.sql",
                     ],
                 }
             )
@@ -281,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = {
         "version": 1,
+        "pipeline_entrypoint": "pipeline.run_incremental",
         "finished_at": datetime.now(tz=LA).isoformat(),
         "business_timezone": common.business_timezone_name(),
         "gold_fact_date_semantics": "Los_Angeles_calendar_date",
@@ -288,6 +319,12 @@ def main(argv: list[str] | None = None) -> int:
         "date_to": date_to,
         "lookback_days": args.lookback_days,
         "db_path": str(db_path),
+        "ingest": {
+            "skip_pull": args.skip_pull,
+            "skip_mcp": args.skip_mcp,
+            "pull_attempted": not args.skip_pull,
+            "mcp_attempted": not args.skip_mcp,
+        },
         "overall_ok": overall_ok,
         "fetch_all_ok": fetch_all_ok if fetch_steps else None,
         "views_applied": views_applied,

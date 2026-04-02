@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply growth layer SQL (50–53) to appsflyer SQLite. Order matters."""
+"""Apply growth layer SQL (50–56) to appsflyer SQLite. Order matters."""
 from __future__ import annotations
 
 import argparse
@@ -15,6 +15,13 @@ VIEW_SQL_FILES = [
     "51_growth_daily_totals_la.sql",
     "52_growth_breakdowns_experimental.sql",
     "53_growth_weekly_totals_la.sql",
+    "54_growth_campaign_daily_la.sql",
+    "55_growth_adset_daily_la.sql",
+    "56_growth_ad_daily_la.sql",
+    "60_activity_daily_totals_la.sql",
+    "61_activity_campaign_daily_la.sql",
+    "62_activity_adset_daily_la.sql",
+    "63_activity_ad_daily_la.sql",
 ]
 
 
@@ -33,7 +40,7 @@ def apply_views(db_path: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Apply growth views 50–53 to SQLite.")
+    p = argparse.ArgumentParser(description="Apply growth views 50–56 to SQLite.")
     p.add_argument(
         "--db",
         default=str(_APPSFLYER_DIR / "data" / "appsflyer.db"),
